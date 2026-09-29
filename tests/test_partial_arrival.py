@@ -10,7 +10,7 @@ from tests.helpers import SLOT_START, apply_payload, batch_available, make_servi
 
 class PartialArrivalTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.catalog, self.bookings, self.clock, self.store = make_services()
+        self.catalog, self.bookings, self.deposits, self.clock, self.store = make_services()
         self.ids = seed_catalog(self.catalog)
         applied = self.bookings.apply(apply_payload(self.ids, "k-pa-apply"))
         self.booking_id = applied["booking_id"]

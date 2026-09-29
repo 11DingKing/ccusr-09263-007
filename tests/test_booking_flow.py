@@ -17,7 +17,7 @@ from tests.helpers import (
 
 class BookingFlowTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.catalog, self.bookings, self.clock, self.store = make_services()
+        self.catalog, self.bookings, self.deposits, self.clock, self.store = make_services()
         self.ids = seed_catalog(self.catalog)
 
     def test_full_lifecycle(self) -> None:
@@ -90,7 +90,7 @@ class BookingFlowTests(unittest.TestCase):
             self.assertIn(expected, events)
 
     def test_cross_border_leftover_recorded_as_loss(self) -> None:
-        catalog, bookings, clock, store = make_services()
+        catalog, bookings, deposits, clock, store = make_services()
         ids = seed_catalog(catalog, dye_cross_border=True, dye_lead_time_seconds=3600)
         applied = bookings.apply(apply_payload(ids, "k-cb-apply"))
         booking_id = applied["booking_id"]

@@ -630,6 +630,151 @@ class Settlement:
         )
 
 
+# ---------------------------------------------------------------------------
+# 预约押金分录
+# ---------------------------------------------------------------------------
+
+
+class DepositEntryType(str, Enum):
+    """押金分录类型。"""
+
+    COLLECT = "COLLECT"  # 收取：客户 -> 押金负债
+    REFUND = "REFUND"  # 退还：押金负债 -> 客户
+    APPLY = "APPLY"  # 抵扣：押金负债 -> 收入结转
+
+
+class DepositState(str, Enum):
+    """押金台账状态。"""
+
+    HELD = "HELD"  # 押金在押（已收取，尚未退还/抵扣完）
+    REFUNDED = "REFUNDED"  # 已全额退还
+    APPLIED = "APPLIED"  # 已全额抵扣结转
+    PARTIALLY_APPLIED = "PARTIALLY_APPLIED"  # 部分抵扣，余额退还
+
+
+@dataclass(frozen=True)
+class DepositEntry:
+    """单笔押金资金分录：收取 / 退还 / 抵扣。
+
+    金额一律为正整数“分”，方向由 :class:`DepositEntryType` 表达；
+    同一台账内 收取合计 == 退还合计 + 抵扣合计（金额守恒）。
+    """
+
+    entry_id: str
+    deposit_id: str
+    booking_id: str
+    type: DepositEntryType
+    amount_cents: int
+    created_at: datetime
+    reason: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "entry_id": self.entry_id,
+            "deposit_id": self.deposit_id,
+            "booking_id": self.booking_id,
+            "type": self.type.value,
+            "amount_cents": self.amount_cents,
+            "created_at": dt_to_str(self.created_at),
+            "reason": self.reason,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "DepositEntry":
+        return cls(
+            entry_id=data["entry_id"],
+            deposit_id=data["deposit_id"],
+            booking_id=data["booking_id"],
+            type=DepositEntryType(data["type"]),
+            amount_cents=int(data["amount_cents"]),
+            created_at=dt_from_str(data["created_at"]),
+            reason=data.get("reason", ""),
+        )
+
+
+@dataclass
+class DepositLedger:
+    """预约押金台账：按守恒不变量维护收取/退还/抵扣分录与余额。"""
+
+    deposit_id: str
+    booking_id: str
+    currency: str
+    created_at: datetime
+    updated_at: datetime
+    entries: list[DepositEntry] = field(default_factory=list)
+
+    @staticmethod
+    def _sum(entries: list[DepositEntry], *types: DepositEntryType) -> int:
+        return sum(e.amount_cents for e in entries if e.type in types)
+
+    @property
+    def collected_cents(self) -> int:
+        return self._sum(self.entries, DepositEntryType.COLLECT)
+
+    @property
+    def refunded_cents(self) -> int:
+        return self._sum(self.entries, DepositEntryType.REFUND)
+
+    @property
+    def applied_cents(self) -> int:
+        return self._sum(self.entries, DepositEntryType.APPLY)
+
+    @property
+    def balance_cents(self) -> int:
+        """在押余额：收取 - 退还 - 抵扣，恒为非负整数分。"""
+        return self.collected_cents - self.refunded_cents - self.applied_cents
+
+    @property
+    def state(self) -> DepositState:
+        if self.balance_cents > 0:
+            return DepositState.HELD
+        if self.applied_cents > 0 and self.refunded_cents > 0:
+            return DepositState.PARTIALLY_APPLIED
+        if self.applied_cents > 0:
+            return DepositState.APPLIED
+        return DepositState.REFUNDED
+
+    def _ensure_conservation(self) -> None:
+        if self.refunded_cents + self.applied_cents > self.collected_cents:
+            raise ValueError("deposit entries violate conservation: refunds + applications exceed collections")
+
+    def add(self, entry: DepositEntry) -> None:
+        """追加分录并即时复核守恒；违反不变量时拒绝（调用方事务整体回滚）。"""
+        if entry.deposit_id != self.deposit_id or entry.booking_id != self.booking_id:
+            raise ValueError("deposit entry does not belong to this ledger")
+        if entry.amount_cents <= 0:
+            raise ValueError("deposit entry amount must be positive")
+        self.entries.append(entry)
+        try:
+            self._ensure_conservation()
+        except ValueError:
+            self.entries.pop()
+            raise
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "deposit_id": self.deposit_id,
+            "booking_id": self.booking_id,
+            "currency": self.currency,
+            "created_at": dt_to_str(self.created_at),
+            "updated_at": dt_to_str(self.updated_at),
+            "entries": [e.to_dict() for e in sorted(self.entries, key=lambda e: (e.created_at, e.entry_id))],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "DepositLedger":
+        ledger = cls(
+            deposit_id=data["deposit_id"],
+            booking_id=data["booking_id"],
+            currency=data["currency"],
+            created_at=dt_from_str(data["created_at"]),
+            updated_at=dt_from_str(data["updated_at"]),
+            entries=[DepositEntry.from_dict(e) for e in data.get("entries", [])],
+        )
+        ledger._ensure_conservation()
+        return ledger
+
+
 @dataclass
 class DomainEvent:
     """领域事件：审计与断言用。"""

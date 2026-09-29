@@ -9,7 +9,7 @@ from tests.helpers import apply_payload, batch_available, make_services, seed_ca
 
 class IdempotencyTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.catalog, self.bookings, self.clock, self.store = make_services()
+        self.catalog, self.bookings, self.deposits, self.clock, self.store = make_services()
         self.ids = seed_catalog(self.catalog)
 
     def test_apply_replay_returns_same_booking(self) -> None:

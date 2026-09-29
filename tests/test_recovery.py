@@ -51,7 +51,7 @@ class RecoveryTests(unittest.TestCase):
             store2.close()
 
     def test_expired_quote_returns_to_requested(self) -> None:
-        catalog, bookings, clock, store = make_services(quote_ttl_seconds=30)
+        catalog, bookings, deposits, clock, store = make_services(quote_ttl_seconds=30)
         ids = seed_catalog(catalog)
         applied = bookings.apply(apply_payload(ids, "k-rec-q"))
         bookings.quote(applied["booking_id"])
@@ -64,7 +64,7 @@ class RecoveryTests(unittest.TestCase):
         self.assertIn("quote_expired", event_types(view))
 
     def test_active_lock_not_touched(self) -> None:
-        catalog, bookings, clock, store = make_services(lock_ttl_seconds=3600)
+        catalog, bookings, deposits, clock, store = make_services(lock_ttl_seconds=3600)
         ids = seed_catalog(catalog)
         applied = bookings.apply(apply_payload(ids, "k-rec-live"))
         bookings.quote(applied["booking_id"])

@@ -19,6 +19,7 @@ from ..application.catalog_service import (
     COLLECTION_WINDOWS,
     CatalogService,
 )
+from ..application.deposit_service import DepositService
 from ..domain.errors import (
     BusinessRuleError,
     ConflictError,
@@ -61,7 +62,7 @@ class _Router:
         return None
 
 
-def build_router(catalog: CatalogService, bookings: BookingService) -> _Router:
+def build_router(catalog: CatalogService, bookings: BookingService, deposits: DepositService) -> _Router:
     router = _Router()
 
     def with_idempotency_key(payload: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
@@ -137,6 +138,28 @@ def build_router(catalog: CatalogService, bookings: BookingService) -> _Router:
         "/bookings/{booking_id}/cancel",
         lambda body, hdr: bookings.cancel(hdr["__path__"]["booking_id"], with_idempotency_key(body, hdr)),
     )
+    # 预约押金：收取 / 退还 / 抵扣 / 查询
+    router.add(
+        "POST",
+        "/bookings/{booking_id}/deposit",
+        lambda body, hdr: deposits.collect(hdr["__path__"]["booking_id"], with_idempotency_key(body, hdr)),
+    )
+    router.add(
+        "GET",
+        "/bookings/{booking_id}/deposit",
+        lambda body, hdr: deposits.get_deposit(hdr["__path__"]["booking_id"]),
+    )
+    router.add(
+        "POST",
+        "/bookings/{booking_id}/deposit/refund",
+        lambda body, hdr: deposits.refund(hdr["__path__"]["booking_id"], with_idempotency_key(body, hdr)),
+    )
+    router.add(
+        "POST",
+        "/bookings/{booking_id}/deposit/apply",
+        lambda body, hdr: deposits.apply_deposit(hdr["__path__"]["booking_id"], with_idempotency_key(body, hdr)),
+    )
+    router.add("GET", "/deposits", lambda body, hdr: {"items": deposits.list_deposits()})
     router.add("POST", "/admin/recover", lambda body, hdr: bookings.recover())
     router.add("GET", "/health", lambda body, hdr: {"status": "ok"})
     return router
@@ -200,9 +223,10 @@ def create_server(
     port: int,
     catalog: CatalogService,
     bookings: BookingService,
+    deposits: DepositService,
 ) -> ThreadingHTTPServer:
     """构建线程化 HTTP 服务（守护线程，随进程退出）。"""
-    router = build_router(catalog, bookings)
+    router = build_router(catalog, bookings, deposits)
     server = ThreadingHTTPServer((host, port), make_handler_class(router))
     server.daemon_threads = True
     return server

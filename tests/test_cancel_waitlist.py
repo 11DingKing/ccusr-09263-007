@@ -9,7 +9,7 @@ from tests.helpers import apply_payload, batch_available, event_types, make_serv
 
 class CancelAndWaitlistTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.catalog, self.bookings, self.clock, self.store = make_services()
+        self.catalog, self.bookings, self.deposits, self.clock, self.store = make_services()
 
     def test_cancel_requested_promotes_waitlist_fifo(self) -> None:
         ids = seed_catalog(self.catalog, window_capacity=1)

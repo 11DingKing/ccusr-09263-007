@@ -14,9 +14,9 @@ from tests.helpers import make_services, seed_catalog
 class HttpApiTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        catalog, bookings, clock, store = make_services()
+        catalog, bookings, deposits, clock, store = make_services()
         cls.ids = seed_catalog(catalog)
-        cls.server = create_server("127.0.0.1", 0, catalog, bookings)
+        cls.server = create_server("127.0.0.1", 0, catalog, bookings, deposits)
         cls.port = cls.server.server_address[1]
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
         cls.thread.start()

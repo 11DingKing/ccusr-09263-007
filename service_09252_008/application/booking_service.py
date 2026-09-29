@@ -8,8 +8,6 @@
 """
 from __future__ import annotations
 
-import hashlib
-import json
 from datetime import timedelta
 from typing import Any, Callable
 
@@ -17,7 +15,6 @@ from ..domain.errors import (
     BookingImmutableError,
     BusinessRuleError,
     ConflictError,
-    IdempotencyConflict,
     NotFoundError,
     StateError,
     ValidationError,
@@ -64,6 +61,7 @@ from .catalog_service import (
     COLLECTION_RESOURCES,
     COLLECTION_WINDOWS,
 )
+from .idempotency import run_idempotent
 from .ports import Clock, IdGenerator
 
 COLLECTION_BOOKINGS = "bookings"
@@ -72,16 +70,11 @@ COLLECTION_SHIPMENTS = "shipments"
 COLLECTION_LOSSES = "material_losses"
 COLLECTION_SETTLEMENTS = "settlements"
 COLLECTION_EVENTS = "events"
-COLLECTION_IDEMPOTENCY = "idempotency_keys"
 
 DEFAULT_LOCK_TTL_SECONDS = 1800
 DEFAULT_QUOTE_TTL_SECONDS = 86400
 MIN_LOCK_TTL_SECONDS = 60
 MAX_LOCK_TTL_SECONDS = 86400
-
-
-def _canonical(payload: dict[str, Any]) -> str:
-    return json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
 
 
 class BookingService:
@@ -126,34 +119,7 @@ class BookingService:
         required: bool,
     ) -> dict[str, Any]:
         """幂等执行：键命中且载荷一致则重放首次结果。"""
-        if key is None:
-            if required:
-                raise ValidationError("idempotency_key is required for this operation")
-            with self._store.transaction():
-                return fn()
-        fingerprint = hashlib.sha256(_canonical(payload).encode("utf-8")).hexdigest()
-        with self._store.transaction():
-            existing = self._store.get(COLLECTION_IDEMPOTENCY, key)
-            if existing is not None:
-                if existing["endpoint"] != endpoint or existing["request_hash"] != fingerprint:
-                    raise IdempotencyConflict(
-                        "idempotency key was already used with a different request",
-                        details={"key": key, "endpoint": endpoint},
-                    )
-                return {**existing["response"], "idempotent_replay": True}
-            result = fn()
-            self._store.put(
-                COLLECTION_IDEMPOTENCY,
-                key,
-                {
-                    "key": key,
-                    "endpoint": endpoint,
-                    "request_hash": fingerprint,
-                    "response": result,
-                    "created_at": dt_to_str(self._clock.now()),
-                },
-            )
-            return result
+        return run_idempotent(self._store, self._clock, endpoint, key, payload, fn, required=required)
 
     # ------------------------------------------------------------------
     # 读取辅助
