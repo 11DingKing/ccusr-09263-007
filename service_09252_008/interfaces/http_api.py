@@ -1,7 +1,8 @@
 """HTTP/JSON 接口边界（仅标准库实现）。
 
 路由覆盖：目录登记、申请、报价、锁定、改期、发运、到货、签到、结算、
-取消与超时恢复。幂等键可经 ``Idempotency-Key`` 请求头或载荷字段传入。
+取消、超时恢复，以及预约押金的收取/退还/抵扣与查询。
+幂等键可经 ``Idempotency-Key`` 请求头或载荷字段传入。
 """
 from __future__ import annotations
 
@@ -19,6 +20,7 @@ from ..application.catalog_service import (
     COLLECTION_WINDOWS,
     CatalogService,
 )
+from ..application.deposit_service import DepositService
 from ..domain.errors import (
     BusinessRuleError,
     ConflictError,
@@ -61,7 +63,9 @@ class _Router:
         return None
 
 
-def build_router(catalog: CatalogService, bookings: BookingService) -> _Router:
+def build_router(
+    catalog: CatalogService, bookings: BookingService, deposits: DepositService | None = None
+) -> _Router:
     router = _Router()
 
     def with_idempotency_key(payload: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
@@ -139,6 +143,35 @@ def build_router(catalog: CatalogService, bookings: BookingService) -> _Router:
     )
     router.add("POST", "/admin/recover", lambda body, hdr: bookings.recover())
     router.add("GET", "/health", lambda body, hdr: {"status": "ok"})
+
+    # 预约押金：收取 / 退还 / 抵扣 / 查询（deposits 缺省时不注册）
+    if deposits is not None:
+        router.add(
+            "POST",
+            "/bookings/{booking_id}/deposit/collect",
+            lambda body, hdr: deposits.collect(
+                hdr["__path__"]["booking_id"], with_idempotency_key(body, hdr)
+            ),
+        )
+        router.add(
+            "POST",
+            "/bookings/{booking_id}/deposit/refund",
+            lambda body, hdr: deposits.refund(
+                hdr["__path__"]["booking_id"], with_idempotency_key(body, hdr)
+            ),
+        )
+        router.add(
+            "POST",
+            "/bookings/{booking_id}/deposit/deduct",
+            lambda body, hdr: deposits.deduct(
+                hdr["__path__"]["booking_id"], with_idempotency_key(body, hdr)
+            ),
+        )
+        router.add(
+            "GET",
+            "/bookings/{booking_id}/deposit",
+            lambda body, hdr: deposits.get_deposit(hdr["__path__"]["booking_id"]),
+        )
     return router
 
 
@@ -200,9 +233,10 @@ def create_server(
     port: int,
     catalog: CatalogService,
     bookings: BookingService,
+    deposits: DepositService | None = None,
 ) -> ThreadingHTTPServer:
     """构建线程化 HTTP 服务（守护线程，随进程退出）。"""
-    router = build_router(catalog, bookings)
+    router = build_router(catalog, bookings, deposits)
     server = ThreadingHTTPServer((host, port), make_handler_class(router))
     server.daemon_threads = True
     return server

@@ -13,7 +13,8 @@ service_09252_008/
 ├── application/       # 应用服务层
 │   ├── ports.py       #   可替换端口：Clock / IdGenerator（测试注入手动时钟与序列 ID）
 │   ├── catalog_service.py  # 目录登记与校验
-│   └── booking_service.py  # 预约状态机：申请/报价/锁定/改期/发运/到货/签到/结算/取消/恢复
+│   ├── booking_service.py  # 预约状态机：申请/报价/锁定/改期/发运/到货/签到/结算/取消/恢复
+│   └── deposit_service.py  # 预约押金：收取/退还/抵扣分录与金额守恒
 ├── persistence/       # 持久化层
 │   ├── store.py       #   存储端口 + 内存实现（快照回滚）
 │   └── sqlite_store.py     # SQLite 实现（BEGIN IMMEDIATE，重启可恢复）
@@ -36,6 +37,12 @@ service_09252_008/
   （`non_returnable_leftover`），课中损坏记 `damaged_in_use`。
 - **超时恢复**：过期锁定释放库存并晋级候补，过期报价退回待报价；
   服务启动时与 `POST /admin/recover` 均可触发。
+- **预约押金分录**：押金拆为收取（COLLECT）、退还（REFUND）、抵扣（DEDUCT）
+  三类资金分录，金额以整数分计并恒守恒：
+  `收取 = 已退还 + 已抵扣 + 在押`，`现金 = 收取 - 退还`
+  （抵扣只是押金负债转收入，不移动现金）。每个用例在单个 SQLite 事务内
+  “查重-判余-过账”；同一幂等键的重复退款重放首次结果，不产生第二笔资金变动，
+  无键的超额/重复退款则被“不得超过在押金额”规则拒绝。
 - **时间**：内部一律 UTC；输入接受任意 ISO-8601 偏移（拒绝朴素时间）。
 
 ## 运行
@@ -61,6 +68,10 @@ python3 -m service_09252_008 --host 127.0.0.1 --port 8080
 | POST | `/bookings/{id}/checkin` | 签到 |
 | POST | `/bookings/{id}/settle` | 结算（`actual_attendance`、可选 `damaged`） |
 | POST | `/bookings/{id}/cancel` | 取消（释放候补、按规则记损耗） |
+| POST | `/bookings/{id}/deposit/collect` | 收取押金（正整数分，每预约一笔） |
+| POST | `/bookings/{id}/deposit/refund` | 退还押金（缺省退全部在押余额） |
+| POST | `/bookings/{id}/deposit/deduct` | 抵扣结算款（现金不变） |
+| GET  | `/bookings/{id}/deposit` | 查询押金台账与分录（返回守恒后余额） |
 | POST | `/admin/recover` | 恢复超时任务 |
 | GET  | `/bookings/{id}` `/health` | 查询 |
 
@@ -75,7 +86,8 @@ python3 -m unittest discover -s tests -v
 
 覆盖：主流程端到端、前置培训/容量/安全/互斥/运输周期规则、跨时区、
 幂等重放、并发锁定（内存与 SQLite 双后端）、重启后超时恢复、
-部分到货与在途损耗、取消释放候补与损耗记录、HTTP 接口边界。
+部分到货与在途损耗、取消释放候补与损耗记录、
+押金收取/退还/抵扣金额守恒与重复退款幂等（含 SQLite 重开库与并发退款）、HTTP 接口边界。
 
 ## 编译检查
 

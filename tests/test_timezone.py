@@ -10,7 +10,7 @@ from tests.helpers import apply_payload, make_services, seed_catalog
 
 class TimezoneTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.catalog, self.bookings, self.clock, self.store = make_services()
+        self.catalog, self.bookings, self.deposits, self.clock, self.store = make_services()
 
     def test_slot_accepted_in_any_offset_and_normalized_to_utc(self) -> None:
         ids = seed_catalog(self.catalog)  # 窗口 09:00-17:00 Asia/Shanghai

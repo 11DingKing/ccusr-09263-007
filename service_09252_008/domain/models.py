@@ -630,6 +630,160 @@ class Settlement:
         )
 
 
+# ---------------------------------------------------------------------------
+# 预约押金：资金账户与分录
+# ---------------------------------------------------------------------------
+
+
+class DepositEntryType(str, Enum):
+    COLLECT = "COLLECT"  # 收取押金（现金增加，押金负债等额增加）
+    REFUND = "REFUND"  # 退还押金（现金减少，押金负债等额减少）
+    DEDUCT = "DEDUCT"  # 抵扣结算款（现金不变，押金负债减少、平台收入增加）
+
+
+class DepositLedgerState(str, Enum):
+    OPEN = "OPEN"  # 押金在账（已收取，尚未退完/抵完）
+    SETTLED = "SETTLED"  # 已结清：收取额 == 已退 + 已抵
+    REFUNDED = "REFUNDED"  # 已全额退还（SETTLED 的特例）
+
+
+@dataclass(frozen=True)
+class DepositEntry:
+    """单笔押金资金变动（不可变凭证行）。"""
+
+    entry_id: str
+    booking_id: str
+    type: DepositEntryType
+    amount_cents: int  # 恒为正数；资金方向由类型决定
+    created_at: datetime
+    idempotency_key: str | None = None
+    reason: str | None = None
+
+    def signed_cash_cents(self) -> int:
+        """对现金余额的带符号影响：收取为正、退还为负、抵扣不移动现金。"""
+        if self.type is DepositEntryType.COLLECT:
+            return self.amount_cents
+        if self.type is DepositEntryType.REFUND:
+            return -self.amount_cents
+        return 0
+
+    def signed_deposit_cents(self) -> int:
+        """对在押押金（负债）的带符号影响：收取为正、退还/抵扣为负。"""
+        if self.type is DepositEntryType.COLLECT:
+            return self.amount_cents
+        return -self.amount_cents
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "entry_id": self.entry_id,
+            "booking_id": self.booking_id,
+            "type": self.type.value,
+            "amount_cents": self.amount_cents,
+            "created_at": dt_to_str(self.created_at),
+            "idempotency_key": self.idempotency_key,
+            "reason": self.reason,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "DepositEntry":
+        return cls(
+            entry_id=data["entry_id"],
+            booking_id=data["booking_id"],
+            type=DepositEntryType(data["type"]),
+            amount_cents=int(data["amount_cents"]),
+            created_at=dt_from_str(data["created_at"]),
+            idempotency_key=data.get("idempotency_key"),
+            reason=data.get("reason"),
+        )
+
+
+@dataclass
+class DepositLedger:
+    """预约押金台账：一个预约至多一个，登记收取/退还/抵扣三类分录。
+
+    金额守恒（单位：分）::
+
+        collected_cents == refunded_cents + deducted_cents + held_cents
+
+    即“在押押金 + 已退出押金（退还+抵扣）恒等于已收取押金”。
+    ``cash_cents`` 为现金账户余额：收取增加、退还减少、抵扣不变。
+    """
+
+    ledger_id: str
+    booking_id: str
+    currency: str
+    collected_cents: int = 0
+    refunded_cents: int = 0
+    deducted_cents: int = 0
+    cash_cents: int = 0
+    state: DepositLedgerState = DepositLedgerState.OPEN
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+    @property
+    def held_cents(self) -> int:
+        """当前仍在账上的押金。"""
+        return self.collected_cents - self.refunded_cents - self.deducted_cents
+
+    def is_consistent(self) -> bool:
+        """金额守恒校验：在押非负，现金 == 收取 - 退还。"""
+        return (
+            self.collected_cents >= 0
+            and self.refunded_cents >= 0
+            and self.deducted_cents >= 0
+            and self.held_cents >= 0
+            and self.cash_cents == self.collected_cents - self.refunded_cents
+        )
+
+    def apply(self, entry: DepositEntry) -> None:
+        """把一条分录过账到本台账（不做业务判定，仅结转金额与状态）。"""
+        if entry.type is DepositEntryType.COLLECT:
+            self.collected_cents += entry.amount_cents
+        elif entry.type is DepositEntryType.REFUND:
+            self.refunded_cents += entry.amount_cents
+        else:
+            self.deducted_cents += entry.amount_cents
+        self.cash_cents += entry.signed_cash_cents()
+        self.updated_at = entry.created_at
+        if self.created_at is None:
+            self.created_at = entry.created_at
+        if self.held_cents == 0:
+            self.state = (
+                DepositLedgerState.REFUNDED
+                if self.deducted_cents == 0 and self.refunded_cents > 0
+                else DepositLedgerState.SETTLED
+            )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "ledger_id": self.ledger_id,
+            "booking_id": self.booking_id,
+            "currency": self.currency,
+            "collected_cents": self.collected_cents,
+            "refunded_cents": self.refunded_cents,
+            "deducted_cents": self.deducted_cents,
+            "cash_cents": self.cash_cents,
+            "state": self.state.value,
+            "created_at": dt_to_str(self.created_at) if self.created_at else None,
+            "updated_at": dt_to_str(self.updated_at) if self.updated_at else None,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "DepositLedger":
+        return cls(
+            ledger_id=data["ledger_id"],
+            booking_id=data["booking_id"],
+            currency=data["currency"],
+            collected_cents=int(data.get("collected_cents", 0)),
+            refunded_cents=int(data.get("refunded_cents", 0)),
+            deducted_cents=int(data.get("deducted_cents", 0)),
+            cash_cents=int(data.get("cash_cents", 0)),
+            state=DepositLedgerState(data.get("state", DepositLedgerState.OPEN.value)),
+            created_at=dt_from_str(data["created_at"]) if data.get("created_at") else None,
+            updated_at=dt_from_str(data["updated_at"]) if data.get("updated_at") else None,
+        )
+
+
 @dataclass
 class DomainEvent:
     """领域事件：审计与断言用。"""

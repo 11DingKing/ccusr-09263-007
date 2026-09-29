@@ -9,7 +9,7 @@ from tests.helpers import SLOT_END, SLOT_START, apply_payload, make_services, se
 
 class PrerequisiteTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.catalog, self.bookings, self.clock, self.store = make_services()
+        self.catalog, self.bookings, self.deposits, self.clock, self.store = make_services()
 
     def test_missing_qualification_rejected(self) -> None:
         ids = seed_catalog(self.catalog)

@@ -35,7 +35,7 @@ class ConcurrentLockTests(unittest.TestCase):
             return list(pool.map(try_lock, booking_ids))
 
     def test_only_one_lock_wins_in_memory(self) -> None:
-        catalog, bookings, clock, store = make_services()
+        catalog, bookings, deposits, clock, store = make_services()
         ids = seed_catalog(catalog, window_capacity=CONCURRENT_BOOKINGS + 1)
         results = self._race_locks(catalog, bookings, ids)
         self.assertEqual(results.count("locked"), 1)

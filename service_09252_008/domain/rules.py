@@ -188,3 +188,18 @@ def find_resource_conflict(
         if overlaps(candidate.slot_start, candidate.slot_end, other.slot_start, other.slot_end):
             return other
     return None
+
+
+# ---------------------------------------------------------------------------
+# 预约押金
+# ---------------------------------------------------------------------------
+
+
+def deposit_dedup_key(booking_id: str, entry_type: str, key: str) -> str:
+    """资金分录幂等去重键：同一预约、同一分录类型、同一幂等键只过账一次。
+
+    重复的退款/抵扣/收取请求携带相同键时，服务层据此重放首次结果，
+    不产生第二笔资金变动。无幂等键的请求不进入该去重表，
+    而由“每预约只能收取一次、退还/抵扣不得超过在押金额”等规则拦截。
+    """
+    return f"{booking_id}|{entry_type}|{key}"
